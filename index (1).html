@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>落ちものパズル</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at top, #26345d, #090d1b 65%); color: #fff; }
+    .game { display: flex; gap: 24px; align-items: flex-start; padding: 24px; }
+    .board-wrap { position: relative; border: 4px solid #7d8bb8; border-radius: 8px; overflow: hidden; box-shadow: 0 14px 50px #000a; }
+    canvas { display: block; background: #090d18; }
+    .overlay { position: absolute; inset: 0; display: none; place-items: center; text-align: center; background: #060913d9; }
+    .overlay.show { display: grid; }
+    .overlay strong { display: block; font-size: 34px; color: #ff5577; letter-spacing: 2px; }
+    .overlay span { display: block; margin-top: 8px; color: #c9d1ee; }
+    aside { width: 180px; padding: 20px; border: 1px solid #53618d; border-radius: 12px; background: #161d35d9; box-shadow: 0 14px 50px #0006; }
+    h1 { margin: 0 0 20px; font-size: 25px; }
+    .label { color: #9da8cc; font-size: 13px; }
+    #score { margin: 3px 0 22px; font-size: 30px; font-weight: 800; }
+    .keys { line-height: 1.9; color: #d5dbef; font-size: 14px; }
+    kbd { display: inline-block; min-width: 25px; padding: 0 5px; text-align: center; border: 1px solid #7581a9; border-bottom-width: 3px; border-radius: 5px; background: #2b3456; }
+    button { width: 100%; margin-top: 20px; padding: 11px; border: 0; border-radius: 7px; color: #fff; background: #596cff; font-weight: 700; cursor: pointer; }
+    button:hover { background: #7181ff; }
+    @media (max-width: 570px) { .game { gap: 12px; padding: 8px; } aside { width: 145px; padding: 13px; } h1 { font-size: 20px; } }
+  </style>
+</head>
+<body>
+  <main class="game">
+    <div class="board-wrap">
+      <canvas id="board" width="300" height="600" aria-label="落ちものパズルのゲーム盤"></canvas>
+      <div id="overlay" class="overlay"><div><strong>GAME OVER</strong><span>リスタートで再挑戦！</span></div></div>
+    </div>
+    <aside>
+      <h1>落ちものパズル</h1>
+      <div class="label">SCORE</div>
+      <div id="score">0</div>
+      <div class="keys">
+        <div><kbd>←</kbd> <kbd>→</kbd> 移動</div>
+        <div><kbd>↑</kbd> 回転</div>
+        <div><kbd>↓</kbd> 早く落とす</div>
+      </div>
+      <button id="restart" type="button">リスタート</button>
+    </aside>
+  </main>
+  <script>
+    'use strict';
+    const COLS = 10, ROWS = 20, SIZE = 30;
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const overlay = document.getElementById('overlay');
+    const COLORS = ['#0000', '#42d9f5', '#ffd43b', '#bd62ff', '#57e389', '#ff596d', '#4f7cff', '#ff9f43'];
+    const SHAPES = [
+      [[1,1,1,1]],
+      [[2,2],[2,2]],
+      [[0,3,0],[3,3,3]],
+      [[0,4,4],[4,4,0]],
+      [[5,5,0],[0,5,5]],
+      [[6,0,0],[6,6,6]],
+      [[0,0,7],[7,7,7]]
+    ];
+    let board, piece, score, over, lastTime, dropCounter, animationId;
+
+    const emptyBoard = () => Array.from({length: ROWS}, () => Array(COLS).fill(0));
+    const randomPiece = () => {
+      const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)].map(r => [...r]);
+      return { shape, x: Math.floor((COLS - shape[0].length) / 2), y: 0 };
+    };
+    function collision(p = piece) {
+      return p.shape.some((row, y) => row.some((value, x) => value &&
+        (p.y + y >= ROWS || p.x + x < 0 || p.x + x >= COLS || (p.y + y >= 0 && board[p.y + y][p.x + x]))));
+    }
+    function merge() {
+      piece.shape.forEach((row, y) => row.forEach((value, x) => { if (value && piece.y + y >= 0) board[piece.y + y][piece.x + x] = value; }));
+    }
+    function clearLines() {
+      let lines = 0;
+      for (let y = ROWS - 1; y >= 0; y--) {
+        if (board[y].every(Boolean)) { board.splice(y, 1); board.unshift(Array(COLS).fill(0)); lines++; y++; }
+      }
+      if (lines) { score += [0, 100, 300, 500, 800][lines]; scoreEl.textContent = score; }
+    }
+    function spawn() {
+      piece = randomPiece();
+      if (collision()) { over = true; overlay.classList.add('show'); }
+    }
+    function drop() {
+      if (over) return;
+      piece.y++;
+      if (collision()) { piece.y--; merge(); clearLines(); spawn(); }
+      dropCounter = 0;
+    }
+    function move(dx) { piece.x += dx; if (collision()) piece.x -= dx; }
+    function rotate() {
+      const old = piece.shape;
+      const rotated = old[0].map((_, i) => old.map(row => row[i]).reverse());
+      const oldX = piece.x;
+      piece.shape = rotated;
+      for (const kick of [0, -1, 1, -2, 2]) { piece.x = oldX + kick; if (!collision()) return; }
+      piece.x = oldX; piece.shape = old;
+    }
+    function cell(x, y, color) {
+      ctx.fillStyle = color; ctx.fillRect(x * SIZE + 1, y * SIZE + 1, SIZE - 2, SIZE - 2);
+      ctx.fillStyle = '#ffffff35'; ctx.fillRect(x * SIZE + 3, y * SIZE + 3, SIZE - 6, 4);
+    }
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#1a2238'; ctx.lineWidth = 1;
+      for (let x = 0; x <= COLS; x++) { ctx.beginPath(); ctx.moveTo(x*SIZE,0); ctx.lineTo(x*SIZE,canvas.height); ctx.stroke(); }
+      for (let y = 0; y <= ROWS; y++) { ctx.beginPath(); ctx.moveTo(0,y*SIZE); ctx.lineTo(canvas.width,y*SIZE); ctx.stroke(); }
+      board.forEach((row, y) => row.forEach((v, x) => { if (v) cell(x, y, COLORS[v]); }));
+      if (piece && !over) piece.shape.forEach((row, y) => row.forEach((v, x) => { if (v) cell(piece.x+x, piece.y+y, COLORS[v]); }));
+    }
+    function update(time = 0) {
+      const delta = time - lastTime; lastTime = time; dropCounter += delta;
+      if (dropCounter > 650) drop();
+      draw(); animationId = requestAnimationFrame(update);
+    }
+    function start() {
+      cancelAnimationFrame(animationId); board = emptyBoard(); score = 0; over = false;
+      lastTime = 0; dropCounter = 0; scoreEl.textContent = '0'; overlay.classList.remove('show'); spawn(); update();
+    }
+    document.addEventListener('keydown', e => {
+      if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+      e.preventDefault(); if (over) return;
+      if (e.key === 'ArrowLeft') move(-1);
+      if (e.key === 'ArrowRight') move(1);
+      if (e.key === 'ArrowUp') rotate();
+      if (e.key === 'ArrowDown') drop();
+    });
+    document.getElementById('restart').addEventListener('click', start);
+    start();
+  </script>
+</body>
+</html>
